@@ -1,0 +1,263 @@
+---
+title: "Skolerne i Esbjerg"
+subtitle: "Statistiske analyser </br> baseret på sociale faktorer og karaktergennemsnit"
+author: "Peer Christensen"
+date: "2018/10/21 (opdateret: `r Sys.Date()`)"
+output:
+  xaringan::moon_reader:
+    lib_dir: libs
+    nature:
+      highlightStyle: github
+      highlightLines: true
+      countIncrementalSlides: false
+---
+
+```{r setup, include=FALSE}
+options(htmltools.dir.version = FALSE)
+knitr::opts_chunk$set(echo = F,fig.width=10,fig.height = 7)
+```
+
+```{r echo=FALSE, message=F,warning=F}
+
+library(factoextra)
+library(GGally)
+library(tidyverse)
+library(ggbiplot)
+library(ggcorrplot)
+library(magrittr)
+library(viridis)
+library(leaps)
+library(broom)
+library(FactoMineR)
+
+theme_set(theme_bw())
+
+df <- read_csv2("skoler.csv") %>%
+  filter(!skole %in% c("0_5","6_16"))
+
+df$karakter <- as.character(df$karakter)
+df$karakter <- gsub('^([0-9]{1})([0-9]+)$', '\\1.\\2', df$karakter)
+df$karakter <- as.numeric(df$karakter) 
+
+df$skole = gsub("skolen|_Skole","",df$skole)
+
+df %<>% 
+  mutate(k1  = k1/sum,
+         k2  = k2/sum,
+         k2a = k2a/sum,
+         k2b = k2b/sum,
+         k2c = k2c/sum,
+         k3  = k3/sum,
+         `0_opfyldt` = `0_opfyldt`/sum,
+         `1_opfyldt` = `1_opfyldt`/sum,
+         `2_opfyldt` = `2_opfyldt`/sum,
+         `3_opfyldt` = `3_opfyldt`/sum) %>%
+  select(-sum)
+
+```
+class: inverse, center, middle
+
+# Data
+
+---
+
+## Faktorer
+
+- k1: enlig forælder
+
+- k2: forældre med anden etnisk herkomst
+
+- k3: forældre med lavt uddannelsesniveau
+
+- karaktergennemsnit, alle fag, 9. kl. afgangsprøver
+
+
+
+k2 er videre inddelt i tre landegrupper (a,b,c).
+
+Derudover er der variabler for antallet af kriterier der er opfyldt.
+
+Tallene i analyserne er proportioner af det samlede elevtal pr. skole.
+
+---
+
+```{r echo=F}
+options(digits = 2)
+knitr::kable(df,format="html") %>%
+  kableExtra::kable_styling(font_size = 10) 
+```
+
+---
+## Andel af elever pr. skole for hvert kriterium
+```{r}
+df %>% 
+  gather(key = kriterium, value = andel, k1,k2,k3) %>%
+  ggplot(aes(x=kriterium,y=andel,fill=skole)) + 
+  geom_col() +
+  scale_fill_viridis_d(guide=FALSE) +
+  facet_wrap(~skole) +
+  guides(legend=F)
+
+```
+---
+## Herkomst: elevandel fordelt på landegrupper
+```{r}
+df %>% 
+  gather(key = kriterium, value = andel, k2a,k2b,k2c) %>%
+  ggplot(aes(x=kriterium,y=andel,fill=skole)) + 
+  geom_col() +
+  scale_fill_viridis_d(guide=FALSE) +
+  facet_wrap(~skole) +
+  scale_x_discrete(breaks=c("k2a","k2b","k2c"),
+        labels=c("A", "B", "C"))
+```
+---
+## Antal kriterier opfyldt pr. skole
+```{r}
+df %>% 
+  gather(key = kriterium, value = andel, `0_opfyldt`,`1_opfyldt`,`2_opfyldt`,`3_opfyldt`) %>%
+  ggplot(aes(x=kriterium,y=andel,fill=skole)) + 
+  geom_col() +
+  scale_fill_viridis_d(guide = FALSE) +
+  facet_wrap(~skole) +
+  scale_x_discrete(breaks=c("0_opfyldt","1_opfyldt","2_opfyldt","3_opfyldt"),
+        labels=c("0", "1", "2","3"))
+```
+---
+class: inverse, center, middle
+
+# Korrelationer
+
+---
+## Korrelationer mellem faktorer
+```{r fig.height = 6}
+sign_test <- df  %>% 
+  select(-skole) %>%
+  filter(!is.na(karakter)) %>%
+  cor_pmat()
+
+df  %>% 
+  select(-skole) %>%
+  filter(!is.na(karakter)) %>%
+  cor() %>%
+  ggcorrplot(type   = "lower", 
+             p.mat  = sign_test,
+             colors = c(viridis(3)[1], "white", viridis(5)[4]))
+```
+<p align="center">ikke-signifikante korrelationer markeret med X</p>
+---
+class: inverse, center, middle
+
+# Distance matrix
+
+<p align="center"><i>Hvor meget ligner skolerne hinanden på baggrund af samtlige faktorer?</i></p>
+
+---
+```{r fig.height=8.5,fig.width=9}
+
+df_scale <- df %>%
+  select(-skole) %>%
+  filter(!is.na(karakter)) %>%
+  scale() %>% 
+  data.frame()
+row.names(df_scale) = df$skole[!is.na(df$karakter)]
+
+df_dist <- get_dist(df_scale, stand = TRUE, method = "pearson")
+fviz_dist(df_dist,gradient = list(low = viridis(3)[1], mid = "white", high = viridis(5)[4])) +
+  theme_minimal() +
+  theme(axis.text.x  = element_text(angle=45, hjust=1))
+```
+---
+class: inverse, center, middle
+
+# Klyngeanalyser
+
+<p align="center"><i>Hvordan kan skolerne grupperes?</i></p>
+
+---
+## K-means clustering
+```{r}
+set.seed(324789)
+km.res <- kmeans(df_scale, 3, nstart = 25)
+
+fviz_cluster(km.res, data = df_scale,
+             ellipse.type = "convex",
+             repel = T,
+             palette = viridis(10)[c(1,4,8)],
+             ggtheme = theme_minimal(),
+             main=F)
+```
+---
+## Hierarkisk clustering
+```{r}
+res.hc <- df_scale %>%
+  dist(method = "euclidean") %>% # Compute dissimilarity matrix
+  hclust(method = "ward.D2")     # Compute hierachical clustering
+
+fviz_dend(res.hc, k = 3, # Cut in four groups
+          cex = 1, # label size
+          k_colors = viridis(10)[c(1,4,8)],
+          color_labels_by_k = TRUE, 
+          rect = TRUE,
+          main=NULL) +
+  ylim(c(-5,18))
+```
+---
+
+class: inverse, center, middle
+
+# Principal components analyse
+
+<p align="center"><i>en metode til at visualisere mange indbyrdes korrelerede faktorer</i></p>
+
+---
+```{r fig.height=11,fig.width=13, warning=F,message=F}
+df_pca2 <- PCA(df_scale, graph = FALSE)
+
+fviz_pca_biplot(df_pca2, 
+             fill.ind = factor(km.res$cluster), 
+             col.ind = factor(km.res$cluster),
+             palette=viridis(9)[c(2,5,8)],
+             repel = TRUE,
+             addEllipses = TRUE,
+             #ellipse.type="confidence", # for få punkter i gr. 3
+             legend.title="Gruppe",
+             alpha.var="contrib",
+             col.var = "gray47",
+             title=NULL)
+```
+---
+class: inverse, center, middle
+
+# Lineær regression
+
+<p align="center"><i>Hvilke faktorer udgør den bedste statiske model for karaktergennemsnit?</i></p>
+---
+## Metode
+- <b>Best subsets regression</b> med faktorerne k1, k2, og k3
+- Antallet af faktorer udvælges vha. <i>Adjusted R-squared</i>
+```{r fig.height=6,fig.width=6}
+models <- regsubsets(karakter~k1+k2+k3 -skole, data = df, nvmax = 3)
+
+plot(models,scale="adjr2",col = viridis(10)[3:9])
+```
+<p align="left">Modellen med k2 som eneste faktor er den bedste (højeste Adj.R2)</p>
+---
+## Opsummering af modellen
+```{r}
+fit <- lm(karakter~k2 -skole,data=df)
+knitr::kable(glance(fit)[1:2],format="html")
+```
+</br> 
+```{r}
+knitr::kable(tidy(fit),format="html")
+```
+---
+## karakter ~ k2
+```{r warning=F}
+df %>% 
+  ggplot(aes(x=k2,y=karakter)) +
+  geom_point(size = 5,alpha=.8) +
+  geom_smooth(method="lm", colour = viridis(10)[10], fill = viridis(1)) +
+  scale_fill_viridis_d()
+```
